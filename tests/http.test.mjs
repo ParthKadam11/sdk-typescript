@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import {
   cp,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -398,6 +399,34 @@ test("coverage file uploads send report text as written under relative names", a
       { name: "go/coverage.out", content: go },
     ],
   });
+});
+
+test("coverage file uploads refuse symlink targets outside root", async (t) => {
+  const base = await mkdtemp(join(tmpdir(), "proofline-coverage-symlink-"));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, "workspace");
+  const external = join(base, "external");
+  await mkdir(root);
+  await mkdir(external);
+  await writeFile(join(external, "lcov.info"), "private local canary\n");
+  await symlink(external, join(root, "linked"), "junction");
+  const fixture = await server(t, (_request, response) =>
+    json(response, 500, {}),
+  );
+  const client = new ProoflineClient({ baseUrl: fixture.baseUrl, token });
+  await assert.rejects(
+    client.uploadCoverageFiles(
+      { path: { org_id: orgId, repo_id: repoId } },
+      {
+        tested_sha: "c".repeat(40),
+        root,
+        files: ["linked/lcov.info"],
+      },
+    ),
+    (error) =>
+      error instanceof TypeError && /inside root/.test(error.message),
+  );
+  assert.equal(fixture.calls.length, 0);
 });
 
 test("coverage file uploads refuse locally what the server would refuse", async (t) => {

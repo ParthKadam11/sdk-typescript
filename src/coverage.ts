@@ -1,4 +1,4 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { UploadCoverageReportsBody } from "./operations.js";
 
@@ -41,9 +41,10 @@ function reportName(name: string): string {
 }
 
 /**
- * Reads coverage reports from disk into an upload body, refusing locally what
- * the server would refuse: an abbreviated SHA, a report count outside 1 to 50,
- * duplicate or escaping names, non-UTF-8 content, or a body over 30 MiB.
+ * Reads coverage reports from disk into an upload body, refusing invalid
+ * uploads: an abbreviated SHA, a report count outside 1 to 50, duplicate or
+ * escaping names, paths resolving outside root, non-UTF-8 content, or a body
+ * over 30 MiB.
  */
 export async function readCoverageFiles(
   upload: CoverageFilesUpload,
@@ -64,6 +65,20 @@ export async function readCoverageFiles(
   const names = new Set(files.map((file) => file.name));
   if (names.size !== files.length)
     throw new TypeError("coverage report names must be unique");
+  const realRoot = await realpath(root);
+  for (const file of files) {
+    const resolvedPath = await realpath(file.path);
+    const relativePath = relative(realRoot, resolvedPath);
+    if (
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      isAbsolute(relativePath)
+    )
+      throw new TypeError(
+        `coverage report ${file.name} must resolve to a file inside root`,
+      );
+    file.path = resolvedPath;
+  }
   // Report bytes alone can exceed the body limit; check sizes before reading.
   let bytes = 0;
   for (const file of files) {
